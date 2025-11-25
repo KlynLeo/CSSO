@@ -1,28 +1,28 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <filesystem>
 using namespace std;
+namespace fs = std::filesystem;
 
 #define MAX_PRODUCTS 10000
 #define MAP_SHELVES L"MarketShelves"
-#define MAP_VALAB L"MarketValability"
-#define MAP_PRICES L"ProductPrices"
-#define M_SHELVES L"MutexShelves"
-#define M_VALAB L"MutexValability"
-#define M_PRICES L"MutexPrices"
-#define M_LOGS L"MutexLogs"
-#define M_ERRORS L"MutexErrors"
-#define E_SELL_GO L"DaySellGo"
+#define MAP_VALAB   L"MarketValability"
+#define MAP_PRICES  L"MarketPrices"
+#define M_SHELVES   L"MutexShelves"
+#define M_VALAB     L"MutexValability"
+#define M_PRICES    L"MutexPrices"
+#define M_LOGS      L"MutexLogs"
+#define M_ERRORS    L"MutexErrors"
+#define E_SELL_GO   L"DaySellGo"
 #define E_SELL_DONE L"DaySellDone"
-#define E_DON_GO L"DayDonateGo"
-#define SEM_DAY L"DaySemaphore"
-#define LOG_FILE "C:\\Facultate\\CSSO\\H4\\Reports\\logs.txt"
 #define SOLD_FILE "C:\\Facultate\\CSSO\\H4\\Reports\\Summary\\sold.txt"
-#define ERR_FILE "C:\\Facultate\\CSSO\\H4\\Reports\\Summary\\errors.txt"
+#define LOG_FILE  "C:\\Facultate\\CSSO\\H4\\Reports\\logs.txt"
+#define ERR_FILE  "C:\\Facultate\\CSSO\\H4\\Reports\\Summary\\errors.txt"
 
 int main() {
-    cout << "sell.exe pornit\n";
+    cout << "sell.exe pornit" << endl << flush;
 
     HANDLE hS = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, MAP_SHELVES);
     HANDLE hV = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, MAP_VALAB);
@@ -34,59 +34,53 @@ int main() {
     HANDLE mS = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_SHELVES);
     HANDLE mV = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_VALAB);
     HANDLE mP = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_PRICES);
-    HANDLE mLog = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_LOGS);
-    HANDLE mErr = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_ERRORS);
-
+    HANDLE mL = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_LOGS);
+    HANDLE mE = OpenMutex(MUTEX_ALL_ACCESS, FALSE, M_ERRORS);
     HANDLE eGo = OpenEvent(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, E_SELL_GO);
     HANDLE eDone = OpenEvent(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, E_SELL_DONE);
-    HANDLE eDonGo = OpenEvent(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, E_DON_GO);
-    HANDLE semDay = OpenSemaphore(SEMAPHORE_MODIFY_STATE | SYNCHRONIZE, FALSE, SEM_DAY);
 
     while (true) {
         WaitForSingleObject(eGo, INFINITE);
         ResetEvent(eGo);
 
-        string dayFile;
-        ifstream("current_day.txt") >> dayFile;
-        if (dayFile == "STOP") break;
+        string day; ifstream("current_day.txt") >> day;
+        if (day == "STOP") { cout << "sell.exe terminat" << endl << flush; break; }
 
-        cout << "[Sell] Procesăm fișierul: " << dayFile << endl;
-        ifstream fin("sold/" + dayFile);
-        if (!fin.is_open()) { SetEvent(eDone); continue; }
+        cout << "[Sell] Ziua: " << day << endl << flush;
 
-        string line;
+        ifstream fin("sold/" + day);
+        if (!fin.is_open()) {
+            cout << "[Sell] Fara vanzari (fisier inexistent): sold/" << day << endl << flush;
+            SetEvent(eDone);
+            continue;
+        }
+
+        string line; int cnt = 0;
         while (getline(fin, line)) {
             if (line.empty()) continue;
-            int sh;
-            sscanf_s(line.c_str(), "%d", &sh);
+            int sh; if (sscanf_s(line.c_str(), "%d", &sh) != 1) continue;
 
             WaitForSingleObject(mS, INFINITE);
             DWORD id = shelves[sh];
             ReleaseMutex(mS);
 
             if (id == 0xFFFFFFFF) {
-                WaitForSingleObject(mErr, INFINITE);
-                ofstream(ERR_FILE, ios::app) << "Raft gol la vânzare: " << sh << "\n";
-                ReleaseMutex(mErr);
+                WaitForSingleObject(mE, INFINITE);
+                ofstream(ERR_FILE, ios::app) << "Raft gol la vanzare: " << sh << " (zi " << day << ")\n";
+                ReleaseMutex(mE);
                 continue;
             }
 
-            WaitForSingleObject(mV, INFINITE);
-            DWORD oldVal = valab[id];
-            ReleaseMutex(mV);
-
-            if (oldVal == 0) {
-                WaitForSingleObject(mErr, INFINITE);
-                ofstream(ERR_FILE, ios::app) << "Produs expirat: " << id << " de pe raft " << sh << "\n";
-                ReleaseMutex(mErr);
+            WaitForSingleObject(mV, INFINITE); DWORD val = valab[id]; ReleaseMutex(mV);
+            if (val == 0) {
+                WaitForSingleObject(mE, INFINITE);
+                ofstream(ERR_FILE, ios::app) << "Produs expirat: " << id << " (zi " << day << ")\n";
+                ReleaseMutex(mE);
                 continue;
             }
 
-            WaitForSingleObject(mP, INFINITE);
-            int price = prices[id];
-            ReleaseMutex(mP);
-
-            double net = (oldVal <= 2) ? price * 0.75 : price;
+            WaitForSingleObject(mP, INFINITE); int price = prices[id]; ReleaseMutex(mP);
+            double net = (val <= 2) ? price * 0.75 : price;
 
             WaitForSingleObject(mS, INFINITE);
             WaitForSingleObject(mV, INFINITE);
@@ -98,23 +92,24 @@ int main() {
             ReleaseMutex(mV);
             ReleaseMutex(mS);
 
-            WaitForSingleObject(mLog, INFINITE);
+            WaitForSingleObject(mL, INFINITE);
             ofstream lg(LOG_FILE, ios::app);
-            lg << "S-a vandut produsul " << id << " de pe raft " << sh << " (pret " << price << ", net " << net << ")\n";
-            double total = 0;
-            ifstream in(SOLD_FILE); if (in.is_open()) in >> total; in.close();
+            lg << "S-a vandut produsul " << id
+                << " de pe raftul " << sh
+                << " cu " << val << " zile ramase; "
+                << "pret intreg " << price << ", net " << net << "." << endl;
+            lg.close();
+
+            double total = 0; ifstream in(SOLD_FILE); if (in.is_open()) in >> total; in.close();
             total += net;
             ofstream out(SOLD_FILE, ios::trunc); out << total; out.close();
-            ReleaseMutex(mLog);
+            ReleaseMutex(mL);
+
+            ++cnt;
         }
 
-        cout << "[Sell] Zi procesată complet.\n";
-        WaitForSingleObject(semDay, INFINITE);
+        cout << "[Sell] Vanzari efectuate: " << cnt << " (zi " << day << ")" << endl << flush;
         SetEvent(eDone);
-        ReleaseSemaphore(semDay, 1, NULL);
-        SetEvent(eDonGo);
     }
-
-    cout << "sell.exe terminat\n";
     return 0;
 }
